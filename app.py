@@ -1,6 +1,16 @@
 from ollama import chat
 from pathlib import Path
 import json
+import faiss
+from ollama import embed
+import numpy as np
+
+index = faiss.read_index("data/faiss.index")
+
+chunks = []
+with open("data/chunks.json",'r') as f:
+    chunks = json.load(f)
+print(len(chunks))
 
 chat_dir = Path("Chats")
 chat_dir.mkdir(exist_ok=True)
@@ -120,6 +130,11 @@ else:
 while True:
 
     question = input("You: ")
+    response  = embed(
+    model="nomic-embed-text",
+    input= question
+)
+   
 
     if question.lower() == "exit":
 
@@ -147,7 +162,7 @@ Conversation:
 
         title = response["message"]["content"].strip()
 
-        # -------- Save --------
+        
 
         chat_data = {
             "title": title,
@@ -159,17 +174,39 @@ Conversation:
 
         print(f"\nChat saved as: {title}")
         break
+    model_messages = messages.copy()
 
-    messages.append(
+    question_embedding = response["embeddings"][0]
+    question_embedding_arr = np.array(question_embedding, dtype = np.float32).reshape(1,-1)
+    distances, indices = index.search(question_embedding_arr,3)
+    
+    context = ""
+    for i in indices[0]:
+        context += chunks[i] + "\n\n"
+    
+    rag_prompt = f"""
+    Context:
+    {context}
+    
+    Question:
+    {question}
+    
+    Answer only using the provided context.
+    Keep your answer under 150 words.
+    Do not repeat the context.
+    If the answer is not present, say you don't know.
+    """
+
+    model_messages.append(
         {
             "role": "user",
-            "content": question
+            "content": rag_prompt
         }
     )
 
     stream = chat(
         model="qwen2:7b",
-        messages=messages,
+        messages=model_messages,
         stream=True
     )
 
@@ -184,6 +221,13 @@ Conversation:
         answer += content
 
     print()
+    messages.append(
+            {
+                "role": "user",
+                "content": question
+            }
+        )
+    
 
     messages.append(
         {
